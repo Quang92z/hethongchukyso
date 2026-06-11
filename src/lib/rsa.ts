@@ -103,3 +103,84 @@ export const verifyPKCS1 = (text: string, signatureBase64: string, publicKeyPem:
     return false;
   }
 };
+
+/**
+ * Implement fast file signing using native Web Crypto API
+ */
+export const signFileWebCrypto = async (file: File, privateKeyPem: string): Promise<string> => {
+  try {
+    const pemHeader = "-----BEGIN PRIVATE KEY-----";
+    const pemFooter = "-----END PRIVATE KEY-----";
+    const pemContents = privateKeyPem.substring(
+      privateKeyPem.indexOf(pemHeader) + pemHeader.length,
+      privateKeyPem.indexOf(pemFooter)
+    ).replace(/\s/g, '');
+    
+    const binaryDerString = window.atob(pemContents);
+    const binaryDer = new Uint8Array(binaryDerString.length);
+    for (let i = 0; i < binaryDerString.length; i++) {
+      binaryDer[i] = binaryDerString.charCodeAt(i);
+    }
+
+    const privateKey = await window.crypto.subtle.importKey(
+      "pkcs8",
+      binaryDer.buffer,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+
+    const arrayBuffer = await file.arrayBuffer();
+    const signatureBuffer = await window.crypto.subtle.sign(
+      "RSASSA-PKCS1-v1_5",
+      privateKey,
+      arrayBuffer
+    );
+
+    return forge.util.encode64(forge.util.createBuffer(new Uint8Array(signatureBuffer)).getBytes());
+  } catch (error: any) {
+    throw new Error('Lỗi tạo chữ ký cho file: ' + error.message);
+  }
+};
+
+/**
+ * Implement fast file verification using native Web Crypto API
+ */
+export const verifyFileWebCrypto = async (file: File, signatureBase64: string, publicKeyPem: string): Promise<boolean> => {
+  try {
+    const pemHeader = "-----BEGIN PUBLIC KEY-----";
+    const pemFooter = "-----END PUBLIC KEY-----";
+    const pemContents = publicKeyPem.substring(
+      publicKeyPem.indexOf(pemHeader) + pemHeader.length,
+      publicKeyPem.indexOf(pemFooter)
+    ).replace(/\s/g, '');
+    
+    const binaryDerString = window.atob(pemContents);
+    const binaryDer = new Uint8Array(binaryDerString.length);
+    for (let i = 0; i < binaryDerString.length; i++) {
+      binaryDer[i] = binaryDerString.charCodeAt(i);
+    }
+
+    const publicKey = await window.crypto.subtle.importKey(
+      "spki",
+      binaryDer.buffer,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+
+    const signatureBytes = forge.util.decode64(signatureBase64);
+    const signatureArray = new Uint8Array(signatureBytes.length);
+    for(let i=0; i<signatureBytes.length; i++) signatureArray[i] = signatureBytes.charCodeAt(i);
+
+    const arrayBuffer = await file.arrayBuffer();
+    return await window.crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5",
+      publicKey,
+      signatureArray.buffer,
+      arrayBuffer
+    );
+  } catch (error) {
+    return false;
+  }
+};
