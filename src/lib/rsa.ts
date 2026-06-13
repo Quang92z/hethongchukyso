@@ -109,14 +109,22 @@ export const verifyPKCS1 = (text: string, signatureBase64: string, publicKeyPem:
  */
 export const signFileWebCrypto = async (file: File, privateKeyPem: string): Promise<string> => {
   try {
-    const pemHeader = "-----BEGIN PRIVATE KEY-----";
-    const pemFooter = "-----END PRIVATE KEY-----";
-    const pemContents = privateKeyPem.substring(
-      privateKeyPem.indexOf(pemHeader) + pemHeader.length,
-      privateKeyPem.indexOf(pemFooter)
-    ).replace(/\s/g, '');
+    const pemContents = privateKeyPem.split('\n')
+      .filter(line => !line.includes('-----'))
+      .join('')
+      .replace(/\s/g, '');
+      
+    if (!pemContents) {
+      throw new Error("Khóa bí mật không hợp lệ hoặc rỗng.");
+    }
     
-    const binaryDerString = window.atob(pemContents);
+    let binaryDerString;
+    try {
+      binaryDerString = window.atob(pemContents);
+    } catch(e) {
+      throw new Error("Định dạng Khóa bí mật không đúng (lỗi base64). Vui lòng kiểm tra copy đủ/đúng chưa.");
+    }
+    
     const binaryDer = new Uint8Array(binaryDerString.length);
     for (let i = 0; i < binaryDerString.length; i++) {
       binaryDer[i] = binaryDerString.charCodeAt(i);
@@ -148,14 +156,22 @@ export const signFileWebCrypto = async (file: File, privateKeyPem: string): Prom
  */
 export const verifyFileWebCrypto = async (file: File, signatureBase64: string, publicKeyPem: string): Promise<boolean> => {
   try {
-    const pemHeader = "-----BEGIN PUBLIC KEY-----";
-    const pemFooter = "-----END PUBLIC KEY-----";
-    const pemContents = publicKeyPem.substring(
-      publicKeyPem.indexOf(pemHeader) + pemHeader.length,
-      publicKeyPem.indexOf(pemFooter)
-    ).replace(/\s/g, '');
+    const pemContents = publicKeyPem.split('\n')
+      .filter(line => !line.includes('-----'))
+      .join('')
+      .replace(/\s/g, '');
+      
+    if (!pemContents) {
+      return false;
+    }
     
-    const binaryDerString = window.atob(pemContents);
+    let binaryDerString;
+    try {
+      binaryDerString = window.atob(pemContents);
+    } catch(e) {
+      return false;
+    }
+    
     const binaryDer = new Uint8Array(binaryDerString.length);
     for (let i = 0; i < binaryDerString.length; i++) {
       binaryDer[i] = binaryDerString.charCodeAt(i);

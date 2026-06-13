@@ -1,11 +1,19 @@
-import React, { useState, useRef } from 'react';
-import { KeyRound, Lock, FileSignature, ShieldCheck, Copy, Check, Upload, Download, LogIn, Info, FileText, X, PenTool } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { KeyRound, Lock, FileSignature, ShieldCheck, Copy, Check, Upload, Download, LogIn, Info, FileText, X, PenTool, Move, Users, History } from 'lucide-react';
 import SignatureCanvas from 'react-signature-canvas';
 import { PDFDocument } from 'pdf-lib';
+import * as pdfjsLib from 'pdfjs-dist';
+// @ts-expect-error - Vite handles ?url suffix
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { cn } from './lib/utils';
 import { generateRSAKeys, encryptPKCS1, decryptPKCS1, signPKCS1, verifyPKCS1, signFileWebCrypto, verifyFileWebCrypto } from './lib/rsa';
+import { ContractSignModule } from './components/ContractSignModule';
+import { ContractHistoryModule } from './components/ContractHistoryModule';
+import { SavedContract } from './types';
 
-type Tab = 'keygen' | 'encryption' | 'signature' | 'pdf_sign';
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+type Tab = 'keygen' | 'encryption' | 'signature' | 'pdf_sign' | 'contract_sign' | 'history';
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -14,6 +22,16 @@ export default function App() {
   // Global Key State to pass between tabs
   const [publicKey, setPublicKey] = useState<string>('');
   const [privateKey, setPrivateKey] = useState<string>('');
+  const [publicKeyB, setPublicKeyB] = useState<string>('');
+  const [privateKeyB, setPrivateKeyB] = useState<string>('');
+
+  // Global Saved Contracts State
+  const [savedContracts, setSavedContracts] = useState<SavedContract[]>([]);
+
+  const handleSaveContract = (contract: SavedContract) => {
+    setSavedContracts(prev => [contract, ...prev]);
+    setActiveTab('history');
+  };
 
   if (!isAuthenticated) {
     return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
@@ -78,6 +96,20 @@ export default function App() {
                 label="Ký Trực Quan PDF"
                 description="Ký và đóng dấu lên tài liệu PDF"
               />
+              <NavButton 
+                active={activeTab === 'contract_sign'} 
+                onClick={() => setActiveTab('contract_sign')}
+                icon={<Users size={18} />}
+                label="Ký Hợp Đồng (A & B)"
+                description="Ký kết nhiều bên trên một văn bản"
+              />
+              <NavButton 
+                active={activeTab === 'history'} 
+                onClick={() => setActiveTab('history')}
+                icon={<History size={18} />}
+                label="Lịch Sử Hợp Đồng"
+                description="Lưu trữ tài liệu đã đóng dấu"
+              />
             </nav>
             
             <div className="mt-8 p-5 bg-blue-50 border border-blue-100 rounded-xl">
@@ -108,32 +140,50 @@ export default function App() {
           {/* Main Content Area */}
           <div className="lg:col-span-3">
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm min-h-[600px] overflow-hidden">
-              {activeTab === 'keygen' && (
+              <div className={cn("h-full", activeTab === 'keygen' ? 'block' : 'hidden')}>
                 <KeyGenModule 
                   publicKey={publicKey} 
                   privateKey={privateKey} 
                   setPublicKey={setPublicKey} 
                   setPrivateKey={setPrivateKey} 
+                  publicKeyB={publicKeyB}
+                  privateKeyB={privateKeyB}
+                  setPublicKeyB={setPublicKeyB}
+                  setPrivateKeyB={setPrivateKeyB}
                 />
-              )}
-              {activeTab === 'encryption' && (
+              </div>
+              <div className={cn("h-full", activeTab === 'encryption' ? 'block' : 'hidden')}>
                 <EncryptionModule 
                   defaultPublicKey={publicKey} 
                   defaultPrivateKey={privateKey} 
                 />
-              )}
-              {activeTab === 'signature' && (
+              </div>
+              <div className={cn("h-full", activeTab === 'signature' ? 'block' : 'hidden')}>
                 <SignatureModule 
                   defaultPublicKey={publicKey} 
                   defaultPrivateKey={privateKey} 
                 />
-              )}
-              {activeTab === 'pdf_sign' && (
+              </div>
+              <div className={cn("h-full", activeTab === 'pdf_sign' ? 'block' : 'hidden')}>
                 <PdfVisualSignModule 
                   defaultPublicKey={publicKey} 
                   defaultPrivateKey={privateKey} 
+                  onSaveContract={handleSaveContract}
                 />
-              )}
+              </div>
+              <div className={cn("h-full", activeTab === 'contract_sign' ? 'block' : 'hidden')}>
+                <ContractSignModule 
+                  defaultPublicKey={publicKey} 
+                  defaultPrivateKey={privateKey} 
+                  defaultPrivateKeyB={privateKeyB}
+                  onSaveContract={handleSaveContract}
+                />
+              </div>
+              <div className={cn("h-full", activeTab === 'history' ? 'block' : 'hidden')}>
+                <ContractHistoryModule 
+                  contracts={savedContracts}
+                />
+              </div>
             </div>
           </div>
 
@@ -271,9 +321,11 @@ function NavButton({ active, onClick, icon, label, description }: { active: bool
 // ----------------------------------------------------------------------
 
 function KeyGenModule({ 
-  publicKey, privateKey, setPublicKey, setPrivateKey 
+  publicKey, privateKey, setPublicKey, setPrivateKey,
+  publicKeyB, privateKeyB, setPublicKeyB, setPrivateKeyB
 }: { 
-  publicKey: string, privateKey: string, setPublicKey: (k: string) => void, setPrivateKey: (k: string) => void 
+  publicKey: string, privateKey: string, setPublicKey: (k: string) => void, setPrivateKey: (k: string) => void,
+  publicKeyB: string, privateKeyB: string, setPublicKeyB: (k: string) => void, setPrivateKeyB: (k: string) => void
 }) {
   const [length, setLength] = useState<2048 | 4096>(2048);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -284,8 +336,11 @@ function KeyGenModule({
     setTimeout(async () => {
       try {
         const keys = await generateRSAKeys(length);
+        const keysB = await generateRSAKeys(length);
         setPublicKey(keys.publicKey);
         setPrivateKey(keys.privateKey);
+        setPublicKeyB(keysB.publicKey);
+        setPrivateKeyB(keysB.privateKey);
       } catch (err) {
         alert("Có lỗi xảy ra khi tạo khóa.");
         console.error(err);
@@ -342,19 +397,36 @@ function KeyGenModule({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
         <KeyDisplayBox 
-          label="Public Key (Khóa Công Khai)" 
-          description="Được phân phối công khai để mọi người có thể mã hóa tin nhắn gửi cho bạn hoặc xác minh chữ ký của bạn."
+          label="Public Key (Khóa Công Khai - Bên A)" 
+          description="Khóa của Bên A dùng để đối tác xác minh chữ ký Bên A hoặc mã hóa tin nhắn cho Bên A."
           value={publicKey} 
           onChange={setPublicKey} 
           variant="public" 
         />
         <KeyDisplayBox 
-          label="Private Key (Khóa Bí Mật)" 
-          description="Tài sản tuyệt mật. Dùng để giải mã tin nhắn nhận được hoặc tạo chữ ký số đại diện cho bạn."
+          label="Private Key (Khóa Bí Mật - Bên A)" 
+          description="Khóa tuyệt mật của Bên A dùng để tạo chữ ký số của Bên A."
           value={privateKey} 
           onChange={setPrivateKey} 
+          variant="private" 
+        />
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-8 border-t border-slate-100">
+        <KeyDisplayBox 
+          label="Public Key (Khóa Công Khai - Bên B)" 
+          description="Khóa của Bên B dùng để đối tác xác minh chữ ký Bên B hoặc mã hóa tin nhắn cho Bên B."
+          value={publicKeyB} 
+          onChange={setPublicKeyB} 
+          variant="public" 
+        />
+        <KeyDisplayBox 
+          label="Private Key (Khóa Bí Mật - Bên B)" 
+          description="Khóa tuyệt mật của Bên B dùng để tạo chữ ký số của Bên B."
+          value={privateKeyB} 
+          onChange={setPrivateKeyB} 
           variant="private" 
         />
       </div>
@@ -1093,7 +1165,7 @@ function SignatureModule({ defaultPublicKey, defaultPrivateKey }: { defaultPubli
 // MODULE 4: PDF VISUAL SIGNING
 // ----------------------------------------------------------------------
 
-function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultPublicKey: string, defaultPrivateKey: string }) {
+function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey, onSaveContract }: { defaultPublicKey: string, defaultPrivateKey: string, onSaveContract?: (contract: SavedContract) => void }) {
   const [privKey, setPrivKey] = useState(defaultPrivateKey);
   const [pubKey, setPubKey] = useState(defaultPublicKey);
   
@@ -1104,7 +1176,90 @@ function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultP
 
   const [errorSign, setErrorSign] = useState('');
   
+  const [isSigning, setIsSigning] = useState(false);
+  const [signatureDataUrl, setSignatureDataUrl] = useState<string | null>(null);
+
+  const [pdfDimensions, setPdfDimensions] = useState<{width: number, height: number} | null>(null);
+  // Normalized position for the signature center (0 to 1)
+  const [signaturePos, setSignaturePos] = useState({ x: 0.8, y: 0.85 });
+  const [signatureWidth, setSignatureWidth] = useState(150);
+  const [isDragging, setIsDragging] = useState(false);
+
   const sigCanvas = useRef<SignatureCanvas>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (pdfFileToSign && previewCanvasRef.current) {
+      let isMounted = true;
+      const loadPreview = async () => {
+        try {
+          const fileUrl = URL.createObjectURL(pdfFileToSign);
+          const pdf = await pdfjsLib.getDocument({ url: fileUrl }).promise;
+          const page = await pdf.getPage(1);
+          const viewport = page.getViewport({ scale: 1 });
+          
+          if (isMounted) {
+            setPdfDimensions({ width: viewport.width, height: viewport.height });
+          }
+
+          // Render at 1x resolution, let CSS scale it
+          const scale = 1.0;
+          const scaledViewport = page.getViewport({ scale });
+          
+          const canvas = previewCanvasRef.current;
+          if (canvas) {
+            const context = canvas.getContext('2d');
+            canvas.height = scaledViewport.height;
+            canvas.width = scaledViewport.width;
+            
+            const renderContext = {
+              canvasContext: context!,
+              viewport: scaledViewport
+            } as any;
+            await page.render(renderContext).promise;
+          }
+        } catch (err) {
+          console.error('Lỗi khi hiển thị bản xem trước PDF:', err);
+        }
+      };
+      loadPreview();
+      return () => { isMounted = false; };
+    }
+  }, [pdfFileToSign, signatureDataUrl]);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    (e.target as HTMLDivElement).setPointerCapture(e.pointerId);
+    setIsDragging(true);
+    updatePos(e);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isDragging) {
+      updatePos(e);
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    setIsDragging(false);
+    (e.target as HTMLDivElement).releasePointerCapture(e.pointerId);
+  };
+
+  const updatePos = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!previewCanvasRef.current) return;
+    const rect = previewCanvasRef.current.getBoundingClientRect();
+    let clientX = e.clientX;
+    let clientY = e.clientY;
+    
+    let x = (clientX - rect.left) / rect.width;
+    let y = (clientY - rect.top) / rect.height;
+    
+    // Clamp to boundaries
+    x = Math.max(0, Math.min(1, x));
+    y = Math.max(0, Math.min(1, y));
+    
+    setSignaturePos({ x, y });
+  };
+
 
   const handleSign = async () => {
     setErrorSign('');
@@ -1122,8 +1277,8 @@ function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultP
       return;
     }
 
-    if (!sigCanvas.current || sigCanvas.current.isEmpty()) {
-       setErrorSign('Vui lòng vẽ nét chữ ký vào bảng vẽ để đóng dấu.');
+    if (!signatureDataUrl) {
+       setErrorSign('Vui lòng tạo chữ ký (vẽ nét chữ ký) để đóng dấu.');
        return;
     }
 
@@ -1134,21 +1289,25 @@ function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultP
       const pdfBytes = await pdfFileToSign.arrayBuffer();
       const pdfDoc = await PDFDocument.load(pdfBytes);
       
-      const signatureImageUrl = sigCanvas.current.toDataURL('image/png');
-      const signatureImageBytes = await fetch(signatureImageUrl).then(res => res.arrayBuffer());
+      const signatureImageBytes = await fetch(signatureDataUrl).then(res => res.arrayBuffer());
       const pngImage = await pdfDoc.embedPng(signatureImageBytes);
       
       const pages = pdfDoc.getPages();
       const firstPage = pages[0]; // Stamp on first page
       const { width, height } = firstPage.getSize();
       
-      // Fixed width for signature stamp
-      const stampWidth = 150;
+      // Dynamic width for signature stamp
+      const stampWidth = signatureWidth;
       const stampHeight = (pngImage.height / pngImage.width) * stampWidth;
       
+      // Map normalized coordinates to PDF dimensions
+      // Y-axis in pdf-lib is from bottom to top, whereas DOM is top to bottom
+      const xObj = (signaturePos.x * width) - (stampWidth / 2);
+      const yObj = height - (signaturePos.y * height) - (stampHeight / 2);
+
       firstPage.drawImage(pngImage, {
-        x: width - stampWidth - 50,
-        y: 50,
+        x: xObj,
+        y: yObj,
         width: stampWidth,
         height: stampHeight,
       });
@@ -1170,10 +1329,57 @@ function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultP
   };
 
   return (
-    <div className="p-6 md:p-8 animate-in fade-in slide-in-from-bottom-2 duration-300 h-full flex flex-col gap-10">
-      
-      <div className="bg-gradient-to-br from-rose-50 to-white border border-rose-100 rounded-2xl p-6 shadow-sm">
-        <div className="mb-6 flex flex-col">
+    <>
+      {isSigning && (
+        <div className="fixed inset-0 z-[100] flex flex-col bg-slate-900/90 backdrop-blur-sm p-4 md:p-10 animate-in fade-in">
+          <div className="bg-white flex flex-col flex-1 rounded-2xl overflow-hidden shadow-2xl max-w-5xl w-full mx-auto">
+             <div className="flex items-center justify-between p-4 bg-rose-50 border-b border-rose-100">
+               <h3 className="font-bold text-rose-900 flex items-center gap-2"><PenTool size={18}/> Bảng Vẽ Điện Tử</h3>
+               <button onClick={() => setIsSigning(false)} className="p-2 bg-white border border-rose-200 hover:bg-rose-100 text-rose-600 rounded-lg transition-colors shadow-sm">
+                 <X size={20}/>
+               </button>
+             </div>
+             
+             <div className="flex-1 relative bg-white min-h-[300px]">
+                <SignatureCanvas 
+                  ref={sigCanvas} 
+                  penColor="black"
+                  onEnd={() => {
+                    if (sigCanvas.current && !sigCanvas.current.isEmpty()) {
+                       setSignatureDataUrl(sigCanvas.current.toDataURL('image/png'));
+                    }
+                  }}
+                  canvasProps={{
+                    className: 'absolute inset-0 w-full h-full cursor-crosshair touch-none'
+                  }}
+                />
+                <div className="absolute bottom-6 left-0 right-0 text-center pointer-events-none opacity-10 font-bold text-xl md:text-3xl uppercase tracking-[0.5em]">
+                   Vẽ Chữ Ký Vào Đây
+                </div>
+             </div>
+             
+             <div className="p-4 md:p-6 border-t border-slate-100 bg-slate-50 flex justify-between items-center">
+               <button 
+                 onClick={() => { sigCanvas.current?.clear(); setSignatureDataUrl(null); }} 
+                 className="px-4 py-3 md:px-6 font-semibold text-slate-500 bg-white border border-slate-200 rounded-xl hover:bg-slate-100 transition-colors shadow-sm text-sm"
+               >
+                 Xóa viết lại
+               </button>
+               <button 
+                 onClick={() => setIsSigning(false)} 
+                 className="px-6 py-3 md:px-10 bg-rose-600 text-white text-sm font-bold rounded-xl shadow-md shadow-rose-600/20 hover:bg-rose-700 transition-colors"
+               >
+                 Hoàn tất chữ ký
+               </button>
+             </div>
+          </div>
+        </div>
+      )}
+
+      <div className="p-6 md:p-8 animate-in fade-in slide-in-from-bottom-2 duration-300 h-full flex flex-col gap-10">
+        
+        <div className="bg-gradient-to-br from-rose-50 to-white border border-rose-100 rounded-2xl p-6 shadow-sm">
+          <div className="mb-6 flex flex-col">
           <h2 className="text-xl font-bold text-rose-900 flex items-center gap-3">
             <div className="bg-rose-600 p-2 rounded-lg text-white shadow-md shadow-rose-600/20">
               <PenTool size={20} />
@@ -1222,20 +1428,84 @@ function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultP
 
             <div className="flex flex-col gap-1">
               <label className="text-xs font-bold text-rose-900 uppercase tracking-widest flex items-center justify-between">
-                <div className="flex items-center gap-1">Bảng Vẽ Canvas</div>
-                <button onClick={() => sigCanvas.current?.clear()} className="text-[10px] text-rose-600 hover:underline">Xóa chữ ký</button>
+                <div className="flex items-center gap-1">Chữ ký trực quan</div>
+                {signatureDataUrl && (
+                  <button onClick={() => setSignatureDataUrl(null)} className="text-[10px] text-rose-600 hover:underline">Xóa chữ ký</button>
+                )}
               </label>
-              <div className="border border-rose-200 rounded-xl bg-white overflow-hidden shadow-inner flex flex-col">
-                 <SignatureCanvas 
-                    ref={sigCanvas} 
-                    penColor="black"
-                    canvasProps={{
-                      className: 'w-full h-40 cursor-crosshair touch-none'
-                    }}
-                 />
-                 <div className="w-full text-center text-[10px] text-slate-400 py-1 bg-slate-50 border-t border-slate-100">Ký vào đây - Ảnh sẽ được đóng lên góc tài liệu PDF</div>
+              
+              <div 
+                onClick={() => setIsSigning(true)} 
+                className="h-32 border-2 border-dashed border-rose-300 rounded-xl bg-rose-50/50 hover:bg-rose-50 transition-all cursor-pointer flex flex-col items-center justify-center overflow-hidden relative group"
+              >
+                 {signatureDataUrl ? (
+                   <img src={signatureDataUrl} className="max-h-full max-w-full object-contain p-2" alt="Chữ ký của bạn" />
+                 ) : (
+                   <div className="flex flex-col items-center text-rose-600 opacity-60">
+                     <PenTool size={32} className="mb-2" />
+                     <span className="text-xs font-bold uppercase tracking-wide">Chạm để Ký</span>
+                     <span className="text-[10px] mt-1 text-center px-4">Mở rộng bảng vẽ toàn màn hình</span>
+                   </div>
+                 )}
+                 <div className={cn(
+                   "absolute inset-0 bg-rose-900/5 flex items-center justify-center transition-opacity",
+                   signatureDataUrl ? "opacity-0 group-hover:opacity-100" : "opacity-0 group-hover:opacity-100"
+                 )}>
+                    <span className="bg-white text-rose-700 text-xs font-bold px-4 py-2 rounded-full shadow-md">
+                      {signatureDataUrl ? "Chạm để sửa chữ ký" : "Mở bảng vẽ"}
+                    </span>
+                 </div>
               </div>
             </div>
+
+            {pdfFileToSign && signatureDataUrl && (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-rose-900 uppercase tracking-widest flex items-center justify-between">
+                      Vị trí & Kích thước đóng dấu
+                    </label>
+                    <div className="flex items-center gap-2">
+                       <span className="text-[10px] text-rose-600 font-bold">KT: {signatureWidth}</span>
+                       <input 
+                         type="range" 
+                         min="50" max="400" 
+                         value={signatureWidth} 
+                         onChange={(e) => setSignatureWidth(Number(e.target.value))}
+                         className="w-24 accent-rose-600 h-1 bg-rose-200 rounded-lg appearance-none cursor-pointer"
+                       />
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-rose-500 mb-1">Chạm hoặc kéo rê chữ ký trên tài liệu để thay đổi vị trí. Kéo thanh trượt để chỉnh độ lớn.</div>
+                </div>
+                <div 
+                  className="w-full relative border border-rose-200 rounded-lg overflow-hidden bg-slate-100 group cursor-move touch-none"
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerLeave={handlePointerUp}
+                >
+                  <canvas ref={previewCanvasRef} className="w-full h-auto pointer-events-none block" />
+                  
+                  {/* Fake stamp overlay */}
+                  <div 
+                     className="absolute border-2 border-rose-500 border-dashed bg-rose-500/10 pointer-events-none flex items-center justify-center p-1"
+                     style={{
+                       left: `${signaturePos.x * 100}%`,
+                       top: `${signaturePos.y * 100}%`,
+                       width: `${(signatureWidth / (pdfDimensions?.width || 800)) * 100}%`,
+                       transform: `translate(-50%, -50%)`,
+                       transformOrigin: 'center'
+                     }}
+                  >
+                     <img src={signatureDataUrl} className="w-full h-auto opacity-80" alt="Stamp Preview" />
+                     <div className="absolute -top-3 -right-3 bg-white rounded-full shadow-sm">
+                       <Move size={14} className="text-rose-600 p-0.5" />
+                     </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <button 
               onClick={handleSign}
@@ -1294,23 +1564,41 @@ function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultP
                 <label className="text-xs font-bold text-rose-900 uppercase tracking-widest">
                   Mã Hàm Băm & RSA (.sig)
                 </label>
-                {signatureOutput && (
-                  <button 
-                    onClick={() => {
-                      const blob = new Blob([signatureOutput], { type: 'text/plain' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `${pdfFileToSign?.name || 'document'}.sig`;
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }}
-                    className="text-[10px] font-bold text-rose-600 hover:text-white hover:bg-rose-600 px-2 py-1 rounded transition-colors flex items-center gap-1 border border-rose-200 hover:border-transparent"
-                  >
-                    <Download size={12} />
-                    Tải (.sig)
-                  </button>
-                )}
+                <div className="flex gap-2">
+                  {onSaveContract && signedPdfUrl && signatureOutput && (
+                    <button 
+                      onClick={() => onSaveContract({
+                        id: Math.random().toString(36).substring(7),
+                        name: pdfFileToSign?.name || 'Tài Liệu Đã Ký',
+                        timestamp: Date.now(),
+                        type: 'Cá nhân',
+                        fileUrl: signedPdfUrl,
+                        signatures: { single: signatureOutput }
+                      })}
+                      className="text-[10px] font-bold text-emerald-600 hover:text-white hover:bg-emerald-600 px-2 py-1 rounded transition-colors flex items-center gap-1 border border-emerald-200 hover:border-transparent"
+                    >
+                      <Check size={12} />
+                      Lưu Hợp Đồng
+                    </button>
+                  )}
+                  {signatureOutput && (
+                    <button 
+                      onClick={() => {
+                        const blob = new Blob([signatureOutput], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `${pdfFileToSign?.name || 'document'}.sig`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                      className="text-[10px] font-bold text-rose-600 hover:text-white hover:bg-rose-600 px-2 py-1 rounded transition-colors flex items-center gap-1 border border-rose-200 hover:border-transparent"
+                    >
+                      <Download size={12} />
+                      Tải (.sig)
+                    </button>
+                  )}
+                </div>
               </div>
               <textarea 
                 readOnly
@@ -1326,6 +1614,7 @@ function PdfVisualSignModule({ defaultPublicKey, defaultPrivateKey }: { defaultP
         </div>
       </div>
     </div>
+    </>
   );
 }
 
